@@ -26,7 +26,7 @@ All scripts in this section are the **original code from the paper**, not skelet
 from results_loader import ResultsLoader
 import pandas as pd
 
-loader = ResultsLoader(Path('/datadisks/datadisk1/.../large_scale_max5000_20260423'))
+loader = ResultsLoader(Path(RESULTS_PATH))
 downstream = loader.load_downstream_reliance()  # Table 2
 embeddings = loader.load_embedding_probes()     # Table 3
 geometry = loader.load_geometry_analysis()      # Table 6
