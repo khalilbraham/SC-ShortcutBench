@@ -2,9 +2,9 @@
 
 # Paths
 paths:
-  data: /datadisks/datadisk1/khalil/sc_shortcut_project/data
-  results: /datadisks/datadisk1/khalil/sc_shortcut_project/results
-  benchmarks: /datadisks/datadisk1/khalil/sc_shortcut_project/benchmark_runs
+  data: 
+  results: 
+  benchmarks: 
 
 # Random seed
 random_seed: 42
