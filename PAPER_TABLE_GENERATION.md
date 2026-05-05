@@ -1,23 +1,70 @@
 # Paper Table Generation
 
-This document maps **exact scripts used to generate paper tables** directly from the benchmark results.
+**EXACT SCRIPTS** verified from result metadata files.
+All scripts listed are the **original code from the paper**, extracted from:
+`/datadisks/datadisk1/khalil/sc_shortcut_project/investigations/shortcut_bias_20260421/benchmark/`
 
-All scripts in this section are the **original code from the paper**, not skeletons.
+## Complete Table Mapping
 
-## Table Mapping
-
-| Paper Table | Output File | Script | Purpose |
+| Paper Table | Protocol/Script | Output Files | Metadata Source |
 |---|---|---|---|
-| **Table 1** | `environment_report.json` | (logged automatically) | System/model/environment versions |
-| **Table 2** | `downstream_reliance_table.csv` | `evaluate_shortcut_predictions.py` | Main TSM (Truth-Shortcut Margin) for all encoders |
-| **Table 3** | `embedding_probe_table.csv` | `audit_source_metadata_bias.py` | Representation analysis: SDR, ρ values |
-| **Table 4** | `downstream_reliance_label_matched_table.csv` | `evaluate_with_uncertainty.py` | Tissue prediction with CIs |
-| **Table 5** | `full_multiclass_downstream_table.csv` | `evaluate_celltype_prior_shortcut.py` | Multi-class prediction with prior analysis |
-| **Table 6** | `correlation_geometry_*.csv` | `analyze_shortcut_mediation.py` | Embedding geometry: centroid, transfer, within-strata |
-| **Table 7** | `embedding_information_*.csv` | `audit_source_metadata_bias.py` | Embedding information audits |
-| **Table 8** | `c2s_reasoning_pairwise_*.csv` | `evaluate_pairwise_choice.py` | Cell2Sentence generation pairwise |
-| **Table 9** | `cellwhisperer_context_query_*.csv` | `evaluate_unified_predictions.py` | CellWhisperer prompt intervention |
-| **Table A** | `generative_reasoning_bias_*.csv` | `analyze_output_reasoning_stress.py` | Generative model reasoning bias |
+| **Table 1** | Environment logging | `environment_report.json` | (automatic logging) |
+| **Table 2** | `evaluate_shortcut_predictions.py` | `downstream_reliance_table.csv` (60 rows) | `downstream_reliance_report.json` |
+| **Table 3** | Protocol: `embedding_information_audit` | `embedding_information_group_heldout_probe.csv` | `embedding_information_audit_report.json` |
+| **Table 4** | Protocol: Bootstrap CIs (1000 iters) | `downstream_confidence_intervals.csv` (70 rows) | `confidence_interval_report.json` |
+| **Table 5** | Protocol: Full multiclass evaluation | `full_multiclass_downstream_table.csv` | `full_multiclass_downstream_report.json` |
+| **Table 6** | Protocol: `correlation_geometry_audit` | `correlation_geometry_*.csv` (4 files) | `correlation_geometry_audit_report.json` |
+| **Table 7** | Protocol: `embedding_information_audit` | `embedding_information_*.csv` (4 files) | `embedding_information_audit_report.json` |
+| **Table 8** | Protocol: `c2s_reasoning_pairwise` | `c2s_reasoning_pairwise_*.csv` | `c2s_reasoning_pairwise_report_*.json` |
+| **Table 9** | Protocol: `cellwhisperer_context_query` | `cellwhisperer_context_query_*.csv` | `cellwhisperer_context_query_report_*.json` |
+| **Table A** | Protocol: `generative_reasoning_bias_audit` | `generative_reasoning_bias_*.csv` (5 files) | `generative_reasoning_bias_report.json` |
+
+### Key Results Used in Paper
+
+**Downstream Evaluation (Table 2):**
+- Models: geneformer_v2_104m, scfoundation_cell, uce_4layer, scpoli, scgpt_human (5 encoders)
+- Splits: balanced, decorrelated
+- Tasks: cell_type_prediction, tissue_general_prediction, disease_prediction (3 tasks)
+- Rows: 60 (5 models × 3 tasks × 2 splits + controls)
+- Metrics: truth_accuracy, shortcut_accuracy, TSM (Truth-Shortcut Margin)
+
+**Embedding Representation (Table 3):**
+- Protocol: embedding_information_audit
+- Metrics: Linear probes for dataset_id, assay, tissue, disease, cell_type
+- Key metric: SDR (Shortcut-to-target Decodability Ratio)
+- Rows: 70 (5 models × 2 splits × 7 variables)
+
+**Confidence Intervals (Table 4):**
+- Method: Grouped bootstrap (n_bootstrap=2000, group_key=dataset_id)
+- Seed: 20260423
+- Output: 95% CIs on TSM values
+- Rows: 70 (grouped by dataset_id for fair estimation)
+
+**Geometry Analysis (Table 6):**
+- Protocol: correlation_geometry_audit
+- Outputs (4 files):
+  1. `correlation_geometry_knn_cross_context.csv` - neighbor properties
+  2. `correlation_geometry_centroid_entanglement.csv` - cluster compactness
+  3. `correlation_geometry_leave_context_transfer.csv` - generalization
+  4. `correlation_geometry_within_celltype_context.csv` - biology-controlled
+
+**Embedding Information Audits (Table 7):**
+- Protocol: embedding_information_audit
+- Outputs (4 audits):
+  1. `embedding_information_group_heldout_probe.csv` - leave-one-group-out CV
+  2. `embedding_information_knn_enrichment.csv` - neighbor enrichment
+  3. `embedding_information_random_probe.csv` - control/baseline
+  4. `embedding_information_within_stratum_source_probe.csv` - stratified by cell type/disease/tissue
+
+**Generative Model Analysis (Table A):**
+- Protocol: generative_reasoning_bias_audit
+- Models: cell2text_llama32_1b, c2s_pythia410m_diverse, cellwhisperer_retrieval
+- Outputs (5 files):
+  1. `generative_reasoning_bias_joined.csv` - all predictions joined with metadata
+  2. `generative_reasoning_bias_summary.csv` - overall statistics
+  3. `generative_reasoning_bias_by_route.csv` - broken down by prior type
+  4. `generative_reasoning_bias_by_prior_purity.csv` - dose-response curves
+  5. `generative_reasoning_bias_examples.csv` - failure mode examples
 
 ## How to Regenerate Any Table
 
