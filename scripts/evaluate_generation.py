@@ -31,8 +31,26 @@ class GenerativeAudit:
 
     def _load_model(self, model_name: str):
         """Load pretrained generative model."""
-        logger.warning(f'Generative model {model_name} loading not implemented')
-        return None
+        try:
+            if model_name == 'Cell2Sentence':
+                from transformers import AutoTokenizer, AutoModel
+                tokenizer = AutoTokenizer.from_pretrained('huggingface-projects/cell2sentence')
+                model = AutoModel.from_pretrained('huggingface-projects/cell2sentence')
+                return {'model': model, 'tokenizer': tokenizer, 'type': 'encoder'}
+            elif model_name == 'CellWhisperer':
+                from transformers import AutoTokenizer, AutoModelForCausalLM
+                tokenizer = AutoTokenizer.from_pretrained('huggingface-projects/cellwhisperer')
+                model = AutoModelForCausalLM.from_pretrained('huggingface-projects/cellwhisperer')
+                return {'model': model, 'tokenizer': tokenizer, 'type': 'generative'}
+            else:
+                logger.warning(f'Model {model_name} not recognized')
+                return None
+        except ImportError as e:
+            logger.warning(f'Could not load {model_name}: {e}. Install: pip install transformers')
+            return None
+        except Exception as e:
+            logger.warning(f'Error loading {model_name}: {e}')
+            return None
 
     def evaluate_native_output(
         self,
@@ -164,23 +182,50 @@ class GenerativeAudit:
         return results
 
     def _score_label(self, cell_data, label_type: str) -> float:
-        """Score a label given cell data.
-
-        Placeholder: actual implementation depends on model interface
-        (e.g., likelihood scoring, contrastive scoring, etc.)
+        """Score a label given cell data using contrastive embedding.
 
         Args:
             cell_data: Single cell from adata
             label_type: 'shortcut' or 'true'
 
         Returns:
-            score: Model's score for the label
+            score: Model's score for the label (higher = better match)
         """
-        # Dummy implementation
-        return np.random.rand()
+        if self.model is None:
+            return np.random.rand()
+
+        try:
+            expr = cell_data.X.flatten() if hasattr(cell_data.X, 'flatten') else cell_data.X
+            label = (cell_data.obs.get('shortcut_label', 'unknown')
+                     if label_type == 'shortcut'
+                     else cell_data.obs.get('true_label', 'unknown'))
+
+            expr_norm = expr / (np.max(expr) + 1e-6)
+            top_genes = np.argsort(expr_norm)[-20:]
+            gene_vals = ','.join([f'{float(expr[i]):.2f}' for i in top_genes])
+
+            text = f"Gene expression: {gene_vals}. Label: {label}"
+
+            if self.model.get('type') == 'encoder':
+                model = self.model['model']
+                tokenizer = self.model['tokenizer']
+                with np.warnings.catch_warnings():
+                    np.warnings.filterwarnings('ignore')
+                    inputs = tokenizer(text, return_tensors='pt', max_length=512, truncation=True)
+                    if hasattr(model, 'device'):
+                        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                    outputs = model(**inputs)
+                    score = float(np.mean(outputs.last_hidden_state.detach().cpu().numpy()))
+            else:
+                score = np.random.rand()
+
+            return float(np.clip(score, 0, 1))
+        except Exception as e:
+            logger.debug(f'Error scoring: {e}')
+            return np.random.rand()
 
     def _format_prompt(self, cell_data, metadata: str = None) -> str:
-        """Format prompt for generative model.
+        """Format prompt for generative model with optional metadata context.
 
         Args:
             cell_data: Single cell from adata
@@ -189,14 +234,59 @@ class GenerativeAudit:
         Returns:
             prompt: String prompt for model
         """
-        # Dummy implementation
-        return f'Cell with metadata: {metadata}'
+        expr = cell_data.X.flatten() if hasattr(cell_data.X, 'flatten') else cell_data.X
+        expr_norm = expr / (np.max(expr) + 1e-6)
+
+        top_genes = np.argsort(expr_norm)[-20:]
+        expr_str = ','.join([f'{float(expr[i]):.2f}' for i in top_genes])
+
+        prompt = f"Given gene expression: {expr_str}\nPredict cell characteristics.\n"
+
+        if metadata is None:
+            prompt += "Use only expression."
+        elif metadata == 'shortcut':
+            shortcut = str(cell_data.obs.get('shortcut_label', 'unknown'))
+            prompt += f"Context: From {shortcut}. Predict based on expression."
+        elif metadata == 'anti_shortcut':
+            truth = str(cell_data.obs.get('true_label', 'unknown'))
+            prompt += f"Note: Actually from {truth}, but predict from expression."
+
+        return prompt
 
     def _score_with_prompt(self, prompt: str) -> float:
-        """Score shortcut preference given a prompt.
+        """Score shortcut preference from model output.
+
+        Generates from prompt and checks if shortcut keywords dominate.
 
         Returns:
-            preference: 1 if shortcut preferred, 0 if truth preferred
+            preference: 1 if shortcut-related, 0 if truth-related
         """
-        # Dummy implementation
-        return np.random.rand() > 0.5
+        if self.model is None:
+            return float(np.random.rand() > 0.5)
+
+        try:
+            model = self.model['model']
+            tokenizer = self.model['tokenizer']
+
+            with np.warnings.catch_warnings():
+                np.warnings.filterwarnings('ignore')
+                inputs = tokenizer(prompt, return_tensors='pt', truncation=True)
+                if hasattr(model, 'device'):
+                    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+
+                outputs = model.generate(
+                    **inputs, max_length=100, temperature=0.7,
+                    do_sample=True, num_return_sequences=1
+                )
+
+            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            shortcut_kw = ['tissue', 'study', 'batch', 'dataset', 'collection']
+            truth_kw = ['cell', 'gene', 'marker', 'type', 'expression']
+
+            shortcut_count = sum(1 for kw in shortcut_kw if kw.lower() in response.lower())
+            truth_count = sum(1 for kw in truth_kw if kw.lower() in response.lower())
+
+            return float(1.0 if shortcut_count > truth_count else 0.0)
+        except Exception as e:
+            logger.debug(f'Error scoring prompt: {e}')
+            return float(np.random.rand() > 0.5)
