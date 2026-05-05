@@ -1,0 +1,25 @@
+# Data
+data/
+results/
+benchmark_runs/
+*.h5ad
+*.npz
+*.pkl
+*.parquet
+
+# Cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+.env
+
+# Logs
+*.log

@@ -1,0 +1,105 @@
+# SC-ShortcutBench Pipeline Configuration
+
+# Paths
+paths:
+  data: /datadisks/datadisk1/khalil/sc_shortcut_project/data
+  results: /datadisks/datadisk1/khalil/sc_shortcut_project/results
+  benchmarks: /datadisks/datadisk1/khalil/sc_shortcut_project/benchmark_runs
+
+# Random seed
+random_seed: 42
+
+# Data loading
+data:
+  # Total cells to load (None = all)
+  n_cells: ~
+
+  # Train/test split fraction
+  train_fraction: 0.8
+
+  # Filters (None = no filter)
+  tissue_filter: ~
+  disease_filter: ~
+
+  # Preprocessing
+  min_genes: 200
+  min_cells: 10
+  hvg_selection: true
+  n_hvg: 2000
+
+# Conflict row construction (Algorithm 1)
+conflict_rows:
+  min_support: 5  # Minimum cells to compute prior
+
+  # Tasks to construct
+  tasks:
+    - target: cell_type
+      conditioning_vars: ['dataset_id', 'tissue_general']
+
+    - target: tissue_general
+      conditioning_vars: ['dataset_id', 'cell_type']
+
+    - target: disease
+      conditioning_vars: ['dataset_id', 'tissue_general', 'cell_type']
+
+  # Decorrelation strength (0=balanced, 1=full decorrelation)
+  decorrelation_strength: 1.0
+
+# Models to evaluate
+models:
+  # Frozen encoder models
+  encoders:
+    - scFoundation
+    - Geneformer
+    - UCE
+    - scGPT
+    - scPoli
+
+  # Generative/retrieval models
+  generation:
+    - Cell2Sentence
+    - C2S-Scale
+    - Cell2Text
+    - CellWhisperer
+    - scGPT_generative
+
+# Baseline models
+baselines:
+  - raw_expression
+  - PCA_HVG
+  - scVI
+  - Harmony
+
+evaluate_baselines: true
+
+# Generative model evaluation
+generation:
+  evaluate_prompts: true
+  prompt_conditions:
+    - expression_only
+    - shortcut_context
+    - anti_shortcut_context
+
+# Hardware
+hardware:
+  device: cuda
+  batch_size: 256
+  num_workers: 4
+  mixed_precision: true  # Use float16 for embeddings
+
+# Evaluation settings
+evaluation:
+  # Confidence interval settings
+  bootstrap_n: 1000
+  bootstrap_ci: 0.95
+
+  # Group by dataset_id for clustered bootstrap
+  group_by: dataset_id
+
+  # Save intermediate embeddings
+  save_embeddings: true
+
+# Logging
+logging:
+  level: INFO
+  log_file: benchmark.log
