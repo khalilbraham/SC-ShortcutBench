@@ -26,19 +26,22 @@ SC-ShortcutBench is a comprehensive benchmark for evaluating whether single-cell
 
 ## Quick Start
 
+**⚠️ Note:** Pre-computed results (450+ MB) are NOT in GitHub. See [SETUP.md](SETUP.md) for options.
+
 ```bash
 # Install
 pip install -r requirements.txt
 
-# Configure
-cp configs/benchmark_config.yaml configs/benchmark_config.local.yaml
+# Load code and original evaluation methodology
+python -c "from scripts.evaluate_encoders import EncoderAudit; print('OK')"
 
-# Run
-python scripts/run_benchmark.py --config configs/benchmark_config.local.yaml
-
-# Analyze
-python scripts/run_analysis.py --results-dir results/benchmark_run_*/
+# For full reproducibility, see SETUP.md
 ```
+
+See [SETUP.md](SETUP.md) for:
+- Loading pre-computed results (if you have datadisk1 access)
+- Running new evaluations  
+- Understanding what's in GitHub vs what's stored separately
 
 ## Repository Structure
 
