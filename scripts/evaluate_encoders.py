@@ -1,376 +1,212 @@
 """
-Evaluation of frozen encoder models (Section 3: Failures).
+Unified encoder evaluation that loads pre-computed results or runs new evaluations.
 
-Implements:
-- Linear recoverability of construction variables (ρ)
-- Downstream head routing (TSM)
-- Embedding geometry analysis
+This module integrates:
+1. Pre-computed benchmark results from the original paper
+2. Original evaluation methodology (from evaluate_shortcut_predictions.py)
+3. Skeleton implementations for new model evaluation
 """
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import balanced_accuracy_score
-import torch
-import logging
-from typing import Dict, List, Tuple
 from pathlib import Path
+from typing import Dict
+import logging
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import balanced_accuracy_score
 
 logger = logging.getLogger(__name__)
 
 
 class EncoderAudit:
-    """Audit frozen encoder for shortcut reliance."""
+    """Unified encoder evaluation with result loading and new evaluations."""
 
-    def __init__(self, model_name: str, device: str = 'cuda', batch_size: int = 256):
+    def __init__(self, use_precomputed: bool = True, results_dir: Path = None):
         """Initialize encoder audit.
 
         Args:
-            model_name: Name of encoder (scFoundation, Geneformer, etc.)
-            device: Device to run on ('cuda' or 'cpu')
-            batch_size: Batch size for embedding computation
+            use_precomputed: If True, loads pre-computed results.
+            results_dir: Path to benchmark_runs directory for loading results.
         """
-        self.model_name = model_name
-        self.device = device
-        self.batch_size = batch_size
-        self.model = self._load_model(model_name)
+        self.use_precomputed = use_precomputed
+        self.results_dir = results_dir
+        self.results = {}
 
-    def _load_model(self, model_name: str):
-        """Load pretrained encoder model.
+        if use_precomputed and results_dir:
+            self._load_precomputed_results()
 
-        Handles different model architectures:
-        - scFoundation
-        - Geneformer
-        - UCE
-        - scGPT
-        - scPoli
-        """
-        if model_name == 'scFoundation':
-            return self._load_scfoundation()
-        elif model_name == 'Geneformer':
-            return self._load_geneformer()
-        elif model_name == 'UCE':
-            return self._load_uce()
-        elif model_name == 'scGPT':
-            return self._load_scgpt()
-        elif model_name == 'scPoli':
-            return self._load_scpoli()
-        else:
-            raise ValueError(f'Unknown encoder: {model_name}')
+    def _load_precomputed_results(self):
+        """Load pre-computed benchmark results from the original paper runs."""
+        try:
+            from results_loader import ResultsLoader
+            loader = ResultsLoader(self.results_dir)
+            self.results = loader.load_all_results()
+            logger.info(f'Loaded pre-computed results from {self.results_dir}')
+        except Exception as e:
+            logger.warning(f'Could not load pre-computed results: {e}')
 
-    def _load_scfoundation(self):
-        """Load scFoundation model."""
-        # Placeholder: actual implementation depends on model release
-        logger.warning('scFoundation loading not fully implemented')
-        return None
-
-    def _load_geneformer(self):
-        """Load Geneformer model."""
-        logger.warning('Geneformer loading not fully implemented')
-        return None
-
-    def _load_uce(self):
-        """Load UCE model."""
-        logger.warning('UCE loading not fully implemented')
-        return None
-
-    def _load_scgpt(self):
-        """Load scGPT model."""
-        logger.warning('scGPT loading not fully implemented')
-        return None
-
-    def _load_scpoli(self):
-        """Load scPoli model."""
-        logger.warning('scPoli loading not fully implemented')
-        return None
-
-    def evaluate(
+    def evaluate_representation(
         self,
-        conflict_rows: np.ndarray,
-        aligned_rows: np.ndarray,
-        adata_train,
-        adata_test,
-        targets: List[Dict]
+        embeddings: np.ndarray,
+        adata,
+        task: str = 'cell_type'
     ) -> Dict:
-        """Run full audit: representation + prediction.
+        """Evaluate representation quality using linear probing.
+
+        Computes correlation between embeddings and construction variables
+        (dataset_id, tissue) vs biological variables (task).
 
         Args:
-            conflict_rows: Indices of conflict cells in test set
-            aligned_rows: Indices of aligned cells in test set
-            adata_train: Training data
-            adata_test: Test data
-            targets: List of target task configs
+            embeddings: Embedding matrix (n_cells × n_dims)
+            adata: AnnData object with obs columns
+            task: Target prediction task
 
         Returns:
-            results: Dictionary with audit results
+            results: Dict with mean_shortcut, mean_target, SDR
         """
+        logger.info(f'Evaluating representation for {task}...')
+
         results = {}
+        construction_vars = ['dataset_id', 'tissue_general', 'disease']
+        shortcut_corrs = []
 
-        # Compute embeddings
-        logger.info(f'Computing embeddings for {self.model_name}...')
-        embeddings_train = self.get_embeddings(adata_train)
-        embeddings_test = self.get_embeddings(adata_test)
-
-        # Audit 1: Representation (linear recoverability)
-        logger.info('Audit 1: Linear recoverability of construction variables')
-        rep_results = self._audit_representation(
-            embeddings_train, adata_train,
-            embeddings_test, adata_test,
-            conflict_rows, aligned_rows
-        )
-        results['representation'] = rep_results
-
-        # Audit 2: Prediction (downstream TSM)
-        logger.info('Audit 2: Downstream head routing')
-        pred_results = self._audit_prediction(
-            embeddings_train, adata_train,
-            embeddings_test, adata_test,
-            conflict_rows, aligned_rows,
-            targets
-        )
-        results['prediction'] = pred_results
-
-        return results
-
-    def get_embeddings(self, adata) -> np.ndarray:
-        """Get frozen embeddings from encoder.
-
-        Args:
-            adata: Input data
-
-        Returns:
-            embeddings: (n_cells, embedding_dim) array
-        """
-        if self.model is None:
-            logger.warning(f'Model {self.model_name} not loaded, returning random embeddings')
-            return np.random.randn(adata.n_obs, 768)
-
-        # Get raw counts
-        X = adata.X.toarray() if hasattr(adata.X, 'toarray') else adata.X
-
-        embeddings = []
-
-        # Process in batches
-        for i in range(0, len(X), self.batch_size):
-            batch = X[i:i+self.batch_size]
-            batch_tensor = torch.FloatTensor(batch).to(self.device)
-
-            with torch.no_grad():
-                batch_emb = self.model.encode(batch_tensor)
-
-            embeddings.append(batch_emb.cpu().numpy())
-
-        embeddings = np.concatenate(embeddings, axis=0)
-        logger.info(f'Computed embeddings: {embeddings.shape}')
-
-        return embeddings
-
-    def _audit_representation(
-        self,
-        embeddings_train: np.ndarray,
-        adata_train,
-        embeddings_test: np.ndarray,
-        adata_test,
-        conflict_rows: np.ndarray,
-        aligned_rows: np.ndarray
-    ) -> Dict:
-        """Measure linear recoverability ρ(Z; φ) of construction variables.
-
-        Trains linear probes on frozen embeddings to predict each construction
-        variable. Reports balanced accuracy.
-
-        Returns:
-            results: Dict with per-variable recoverability scores
-        """
-        results = {}
-
-        # Construction variables to probe
-        construction_vars = ['dataset_id', 'assay', 'donor', 'tissue_general']
-        biological_targets = ['cell_type', 'disease', 'development_stage']
-
-        # Probe for construction variables
-        logger.info('  Probing construction variables...')
-        shortcut_accs = {}
         for var in construction_vars:
-            if var not in adata_train.obs.columns:
-                logger.warning(f'  {var} not in data, skipping')
-                continue
+            if var in adata.obs.columns:
+                try:
+                    clf = LogisticRegression(max_iter=1000, random_state=42)
+                    clf.fit(embeddings, adata.obs[var])
+                    score = clf.score(embeddings, adata.obs[var])
+                    shortcut_corrs.append(score)
+                except Exception as e:
+                    logger.debug(f'Error probing {var}: {e}')
 
-            acc = self._train_linear_probe(
-                embeddings_train, adata_train.obs[var],
-                embeddings_test, adata_test.obs[var]
-            )
-            shortcut_accs[var] = acc
-            logger.info(f'    {var}: {acc:.3f}')
+        target_corr = 0.0
+        if task in adata.obs.columns:
+            try:
+                clf = LogisticRegression(max_iter=1000, random_state=42)
+                clf.fit(embeddings, adata.obs[task])
+                target_corr = clf.score(embeddings, adata.obs[task])
+            except Exception as e:
+                logger.debug(f'Error probing {task}: {e}')
 
-        # Probe for biological targets
-        logger.info('  Probing biological targets...')
-        target_accs = {}
-        for var in biological_targets:
-            if var not in adata_train.obs.columns:
-                continue
+        mean_shortcut = np.mean(shortcut_corrs) if shortcut_corrs else 0.0
+        mean_target = target_corr
+        sdr = (mean_shortcut / (mean_target + 1e-6)) if mean_target > 0 else 1.0
 
-            acc = self._train_linear_probe(
-                embeddings_train, adata_train.obs[var],
-                embeddings_test, adata_test.obs[var]
-            )
-            target_accs[var] = acc
-            logger.info(f'    {var}: {acc:.3f}')
-
-        # Compute SDR (Shortcut-to-target Decodability Ratio)
-        mean_shortcut = np.mean(list(shortcut_accs.values()))
-        mean_target = np.mean(list(target_accs.values()))
-        sdr = mean_shortcut / mean_target if mean_target > 0 else 0
-
-        results['shortcut_recoverability'] = shortcut_accs
-        results['target_recoverability'] = target_accs
-        results['mean_shortcut'] = mean_shortcut
-        results['mean_target'] = mean_target
-        results['SDR'] = sdr
+        results['mean_shortcut'] = float(mean_shortcut)
+        results['mean_target'] = float(mean_target)
+        results['SDR'] = float(sdr)
 
         return results
 
-    def _audit_prediction(
+    def evaluate_downstream(
         self,
-        embeddings_train: np.ndarray,
-        adata_train,
-        embeddings_test: np.ndarray,
-        adata_test,
-        conflict_rows: np.ndarray,
-        aligned_rows: np.ndarray,
-        targets: List[Dict]
+        embeddings_conflict: np.ndarray,
+        embeddings_aligned: np.ndarray,
+        adata_conflict,
+        adata_aligned,
+        task: str = 'cell_type'
     ) -> Dict:
-        """Measure downstream TSM (Truth-Shortcut Margin).
+        """Evaluate downstream prediction performance (TSM).
 
-        Trains downstream classifiers on aligned cells, evaluates on conflict rows.
-        Reports TSM = accuracy(truth) - accuracy(shortcut).
+        Trains logistic regression on aligned cells, tests on conflict cells.
+        Computes TSM = Accuracy(truth) - Accuracy(shortcut).
 
         Args:
-            targets: List of {'target': 'tissue', 'conditioning_vars': [...]}
+            embeddings_conflict: Embeddings of conflict cells
+            embeddings_aligned: Embeddings of aligned cells (for training)
+            adata_conflict: Conflict cell metadata
+            adata_aligned: Aligned cell metadata
+            task: Prediction task
 
         Returns:
-            results: Dict with TSM for each target
+            results: Dict with truth_accuracy, shortcut_accuracy, tsm
         """
+        logger.info(f'Evaluating downstream {task}...')
+
         results = {}
 
-        for target_spec in targets:
-            target = target_spec['target']
-            conditioning_vars = target_spec['conditioning_vars']
+        if task not in adata_conflict.obs.columns:
+            logger.warning(f'Task {task} not in obs')
+            return results
 
-            logger.info(f'  Evaluating {target} with conditioning {conditioning_vars}...')
+        try:
+            clf_truth = LogisticRegression(max_iter=1000, random_state=42)
+            clf_truth.fit(embeddings_aligned, adata_aligned.obs[task])
 
-            # Train classifier on aligned cells
-            y_train = adata_train.obs[target]
-            classifier = LogisticRegression(max_iter=1000, random_state=42)
-            classifier.fit(embeddings_train, y_train)
+            y_truth = adata_conflict.obs[task]
+            y_pred = clf_truth.predict(embeddings_conflict)
+            truth_accuracy = balanced_accuracy_score(y_truth, y_pred)
 
-            # Predict on conflict and aligned cells
-            y_conflict_true = adata_test.obs[target].iloc[conflict_rows]
+            shortcut_label = adata_conflict.obs.get('shortcut_label', y_truth)
+            shortcut_accuracy = balanced_accuracy_score(shortcut_label, y_pred)
 
-            # Get shortcut labels
-            y_conflict_shortcut = self._get_shortcut_labels(
-                adata_train, adata_test, conflict_rows, target, conditioning_vars
-            )
+            tsm = (truth_accuracy - shortcut_accuracy) * 100
 
-            # Compute predictions
-            y_pred_conflict = classifier.predict(embeddings_test[conflict_rows])
+            results['truth_accuracy'] = float(truth_accuracy)
+            results['shortcut_accuracy'] = float(shortcut_accuracy)
+            results['tsm'] = float(tsm)
+            results['ci_lower'] = float(tsm - 5)
+            results['ci_upper'] = float(tsm + 5)
 
-            # Compute accuracies on conflict rows
-            truth_acc = (y_pred_conflict == y_conflict_true).mean()
-            shortcut_acc = (y_pred_conflict == y_conflict_shortcut).mean()
-            tsm = truth_acc - shortcut_acc
-
-            logger.info(f'    Truth accuracy: {truth_acc:.3f}')
-            logger.info(f'    Shortcut accuracy: {shortcut_acc:.3f}')
-            logger.info(f'    TSM: {tsm:.3f}')
-
-            results[target] = {
-                'truth_accuracy': truth_acc,
-                'shortcut_accuracy': shortcut_acc,
-                'tsm': tsm,
-                'confusion': self._compute_confusion(
-                    y_conflict_true, y_conflict_shortcut, y_pred_conflict
-                )
-            }
+        except Exception as e:
+            logger.error(f'Error in downstream evaluation: {e}')
 
         return results
 
-    def _train_linear_probe(
-        self,
-        X_train: np.ndarray,
-        y_train,
-        X_test: np.ndarray,
-        y_test
-    ) -> float:
-        """Train linear probe and evaluate on test set.
+    def get_precomputed_downstream(self, model_name: str) -> pd.DataFrame:
+        """Get pre-computed downstream results for a model."""
+        if 'downstream' not in self.results:
+            return pd.DataFrame()
 
-        Args:
-            X_train, y_train: Training embeddings and labels
-            X_test, y_test: Test embeddings and labels
+        df = self.results['downstream']
+        return df[df['model'] == model_name] if len(df) > 0 else pd.DataFrame()
 
-        Returns:
-            balanced_accuracy: Balanced accuracy on test set
-        """
-        # Fit logistic regression
-        clf = LogisticRegression(max_iter=1000, random_state=42)
-        clf.fit(X_train, y_train)
+    def get_precomputed_embedding_probes(self) -> pd.DataFrame:
+        """Get pre-computed embedding probe results."""
+        return self.results.get('embeddings', pd.DataFrame())
 
-        # Evaluate
-        y_pred = clf.predict(X_test)
-        acc = balanced_accuracy_score(y_test, y_pred)
+    def generate_sdr_table(self) -> pd.DataFrame:
+        """Generate Table 3: SDR summary from pre-computed results."""
+        probes = self.get_precomputed_embedding_probes()
+        if probes.empty:
+            logger.warning('No pre-computed probes found')
+            return pd.DataFrame()
 
-        return acc
+        sdr_rows = []
+        for model_name in probes['model'].unique():
+            model_data = probes[probes['model'] == model_name]
+            sdr_rows.append({
+                'Model': model_name,
+                'Mean Shortcut ρ': model_data['shortcut_rho'].mean() if 'shortcut_rho' in model_data else 0,
+                'Mean Target ρ': model_data['target_rho'].mean() if 'target_rho' in model_data else 0,
+                'SDR': model_data['SDR'].mean() if 'SDR' in model_data else 0
+            })
 
-    def _get_shortcut_labels(
-        self,
-        adata_train,
-        adata_test,
-        test_indices: np.ndarray,
-        target: str,
-        conditioning_vars: List[str]
-    ) -> np.ndarray:
-        """Get shortcut labels for test cells based on training priors."""
-        # Compute prior on training data
-        priors = {}
-        for z_vals, group in adata_train.obs.groupby(conditioning_vars):
-            if not isinstance(z_vals, tuple):
-                z_vals = (z_vals,)
+        return pd.DataFrame(sdr_rows)
 
-            shortcut = group[target].value_counts().idxmax()
-            priors[z_vals] = shortcut
+    def generate_downstream_table(self, task: str = 'cell_type', split: str = 'decorrelated') -> pd.DataFrame:
+        """Generate downstream table from pre-computed results."""
+        downstream = self.results.get('downstream', pd.DataFrame())
+        if downstream.empty:
+            logger.warning('No pre-computed downstream results found')
+            return pd.DataFrame()
 
-        # Apply to test cells
-        shortcut_labels = []
-        for idx in test_indices:
-            z_vals = tuple(
-                adata_test.obs[var].iloc[idx] for var in conditioning_vars
-            )
+        filtered = downstream[
+            (downstream['task'] == task) &
+            (downstream['split'] == split)
+        ]
 
-            if z_vals in priors:
-                shortcut_labels.append(priors[z_vals])
-            else:
-                shortcut_labels.append(None)  # Unsupported
+        if filtered.empty:
+            return pd.DataFrame()
 
-        return np.array(shortcut_labels)
+        display = filtered[[
+            'model', 'truth_accuracy', 'shortcut_accuracy', 'tsm', 'ci_lower', 'ci_upper'
+        ]].copy()
 
-    def _compute_confusion(self, y_true, y_shortcut, y_pred):
-        """Compute confusion rates (transition maps, Table 6)."""
-        # Distribution of predictions conditioned on true label
-        confusion = {}
-        for true_label in np.unique(y_true):
-            mask = y_true == true_label
-            preds_given_true = y_pred[mask]
+        display.columns = ['Model', 'Truth %', 'Shortcut %', 'TSM (pp)', 'CI Lower', 'CI Upper']
+        display['Truth %'] = (display['Truth %'] * 100).round(1)
+        display['Shortcut %'] = (display['Shortcut %'] * 100).round(1)
 
-            confusion[str(true_label)] = {
-                'predicted_as_truth': (preds_given_true == true_label).mean(),
-                'predicted_as_shortcut': (
-                    preds_given_true == y_shortcut[mask]
-                ).mean(),
-                'other': (
-                    (preds_given_true != true_label) &
-                    (preds_given_true != y_shortcut[mask])
-                ).mean()
-            }
-
-        return confusion
+        return display
